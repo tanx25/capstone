@@ -1,50 +1,57 @@
 import pandas as pd
-from transformers import BertTokenizer, BertForSequenceClassification
-import torch
-from torch.utils.data import DataLoader, TensorDataset
+from transformers import AutoTokenizer, AutoModelForTokenClassification, pipeline
 
-model_name = 'bert-large-uncased'
-tokenizer = BertTokenizer.from_pretrained(model_name)
-model = BertForSequenceClassification.from_pretrained(model_name, num_labels=2)
+# Bio_ClinicalBERT models using Hugging Face
+model_name = "emilyalsentzer/Bio_ClinicalBERT"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForTokenClassification.from_pretrained(model_name)
 
-data = {
-    'sentence1': ["Playing basketball requires teamwork"],
-    'sentence2': ["Tom plays alone at home"],
-}
+# Initialize the Named Entity Recognition (NER) pipeline
+ner_pipeline = pipeline("ner", model=model, tokenizer=tokenizer, aggregation_strategy="simple")
 
-df = pd.DataFrame(data)
+# read data from excel
+file_path = "QT_regimenes.xlsx"
+df = pd.read_excel(file_path)
 
-encoding = tokenizer(df['sentence1'].tolist(), df['sentence2'].tolist(), padding=True, truncation=True,
-                     return_tensors="pt", max_length=128)
+# Merge all lines into one text for NER processing
+text = " ".join(df.astype(str).values.flatten())
 
-labels = torch.tensor([0])
+# Extract named entities from text
+entities = ner_pipeline(text)
 
-dataset = TensorDataset(encoding['input_ids'], encoding['attention_mask'], labels)
+# Print extracted entities
+print("Raw entities:", entities)
 
-train_loader = DataLoader(dataset, batch_size=1)
+# Filter and extract relevant entities
+relevant_entities = [entity for entity in entities if entity['entity_group'] in ['DRUG']]
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model.to(device)
+print("Extracted Entities:")
+for entity in relevant_entities:
+    print(f"Text: {entity['word']}, Entity: {entity['entity_group']}")
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=2e-5)
+training_data = []
+for entity in relevant_entities:
+    start = max(0, entity['start'] - 50)
+    end = min(len(text), entity['end'] + 50)
+    context = text[start:end]
+    training_data.append({
+        "entity": entity['word'],
+        "entity_group": entity['entity_group'],
+        "context": context,
+        "start": entity['start'],
+        "end": entity['end']
+    })
 
-for epoch in range(3):
-    for batch in train_loader:
-        b_input_ids, b_attention_mask, b_labels = tuple(t.to(device) for t in batch)
-        model.zero_grad()
-        outputs = model(b_input_ids, attention_mask=b_attention_mask, labels=b_labels)
-        loss = outputs.loss
-        loss.backward()
-        optimizer.step()
 
-    print(f"Epoch {epoch + 1}, Loss: {loss.item()}")
+print("Training Data:")
+for data in training_data:
+    print(data)
 
-with torch.no_grad():
-    for batch in train_loader:
-        b_input_ids, b_attention_mask, b_labels = tuple(t.to(device) for t in batch)
-        outputs = model(b_input_ids, attention_mask=b_attention_mask)
-        _, predicted = torch.max(outputs.logits, 1)
-        if predicted.item() == 1:
-            print("Follows")
-        else:
-            print("Not follows")
+
+df_output = pd.DataFrame(training_data)
+
+
+output_file_path = "training_data.csv"
+df_output.to_csv(output_file_path, index=False)
+
+print(f"Entities extraction complete. Results saved to {output_file_path}")
