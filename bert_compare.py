@@ -12,6 +12,7 @@ data = {
     'sentence2': ["Tom plays alone at home"],
 }
 
+
 df = pd.DataFrame(data)
 
 encoding = tokenizer(df['sentence1'].tolist(), df['sentence2'].tolist(), padding=True, truncation=True,
